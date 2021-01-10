@@ -300,9 +300,9 @@ if __name__ == "__main__":
                                     history_size=10, line_search_fn=None)
 
     model.train_LBFGS(train_dict, model.loss_func, optimizer)
-    print(model.pred_dict['f'])
+    # print(model.pred_dict['f'])
     # optimizer = torch.optim.Adam(model.weights+model.biases, lr=1e-5)
-    # model.train(1000, u_data, f_data, bc_data, model.loss_func, optimizer)
+    # model.train(1000, train_dict, model.loss_func, optimizer)
 
     elapsed = time.time() - start_time                
     print('Training time: %.4f' % (elapsed))
