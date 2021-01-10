@@ -17,7 +17,7 @@ class PhysicsInformedNN(nn.Module):
 
         self.weights, self.biases = self.initialize_NN(layers)
 
-        self.u_pred, self.f_pred = None, None
+        self.preds = None
 
         self.loss = None
 
@@ -55,20 +55,26 @@ class PhysicsInformedNN(nn.Module):
 
         W = weights[-1]
         b = biases[-1]
-        Y = torch.add(torch.matmul(H, W), b).requires_grad_()
+        Y = torch.add(torch.matmul(H, W), b) #.requires_grad_()
 
         return Y
 
-    def net_u(self, x, y):
+    def net_u(self, x, y): # direct data match, including Dirichlet BCs
         u = self.neural_net(x, y, self.weights, self.biases)
         return u
     
-    def net_f(self, x, y):
+    def net_du(self, x, y): # first-order derivative match, inlcuding Neumann BCs
 
         u = self.neural_net(x, y, self.weights, self.biases)
 
-        u_x = grad(u.sum(), [x], create_graph=True)[0]
-        u_y = grad(u.sum(), [y], create_graph=True)[0]
+        u_x = grad(u.sum(), x, create_graph=True)[0]
+        u_y = grad(u.sum(), y, create_graph=True)[0]
+
+        return u_x.requires_grad_(True), u_y.requires_grad_(True)
+
+    def net_f(self, x, y): # general PDE match, usually formulated in higher-order
+
+        u_x, u_y = self.net_du(x, y)
 
         u_yy = grad(u_y.sum(), y, create_graph=True)[0]
 
@@ -78,24 +84,49 @@ class PhysicsInformedNN(nn.Module):
 
         return f.requires_grad_(True)
 
-    def forward(self, x_u, y_u, x_f, y_f):
+    def forward(self, x_tensors, y_tensors, keys=None):
 
-        u_pred = self.net_u(x_u, y_u) 
-        f_pred = self.net_f(x_f, y_f)   
+        if keys is None:
+            keys = x_tensors.keys()
+        else:
+            preds = dict()
+            for i in keys:
+                preds[i] = None
 
-        return u_pred, f_pred
+        for i in keys:
 
-    def predict(self, X_input):
-        x_tensor = torch.tensor(X_input[:,0:1], dtype=torch.float32)
-        y_tensor = torch.tensor(X_input[:,1:2], dtype=torch.float32)
-        return self.neural_net(x_tensor,y_tensor, self.weights, self.biases).detach().numpy().squeeze()
+            if i == 'nuem':
+                dudx_pred, _ = self.net_du(x_tensors[i], y_tensors[i])
+                preds[i] = dudx_pred
 
-    def loss_func(self, pred_tuple, true_tuple):
-        u_pred, f_pred = pred_tuple
-        u, f = true_tuple
-        res_u = u - u_pred
-        res_f = f - f_pred
-        loss = torch.mean(res_u.pow(2))+torch.mean(res_f.pow(2))
+            elif i == 'f':
+                f_pred = self.net_f(x_tensors[i], y_tensors[i])
+                preds[i] = f_pred
+
+            elif i == 'u':
+                u_pred = self.net_u(x_tensors[i], y_tensors[i]) 
+                preds[i] = u_pred
+
+            elif i == 'diri':
+                diri_pred = self.net_u(x_tensors[i], y_tensors[i])   
+                preds[i] = diri_pred
+
+        return preds
+
+    def loss_func(self, pred_dict, true_dict, weights=None):
+    
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        keys = pred_dict.keys()
+
+        if weights is None:
+            weights = dict()
+            for i in keys:
+                weights[i] = 1.0
+
+        for i in keys:
+            res = pred_dict[i] - true_dict[i]
+            loss += weights[i]*torch.mean(res.pow(2))
+
         return loss.requires_grad_()
     
     def customized_backward(self, loss, params):
@@ -104,17 +135,30 @@ class PhysicsInformedNN(nn.Module):
             params[vid].grad = grads[vid]
         return grads
 
-    def callback(self, loss):
-        self.loss_list.append(loss)
+    def unzip_train_dict(self, train_dict, keys=None):
+        if keys is None:
+            keys = train_dict.keys()
 
-    def train_LBFGS(self, u_data, f_data, loss_func, optimizer):
-        x_u_tensor, y_u_tensor, u_tensor = u_data
-        x_f_tensor, y_f_tensor, f_tensor = f_data
+        x_tensors = dict()
+        y_tensors = dict()
+        true_dict = dict()
+
+        for i in keys:
+            x_tensors[i] = train_dict[i][0]
+            y_tensors[i] = train_dict[i][1]
+            true_dict[i] = train_dict[i][2]
+
+        return (x_tensors, y_tensors, true_dict)
+
+    def train_LBFGS(self, train_dict, loss_func, optimizer):
+
+        (x_tensors, y_tensors, true_dict) = self.unzip_train_dict(train_dict)
+
         def closure():
 
             optimizer.zero_grad()
-            u_pred, f_pred = self.forward(x_u_tensor, y_u_tensor, x_f_tensor, y_f_tensor)
-            loss = loss_func((u_pred, f_pred), (u_tensor, f_tensor)) #.requires_grad_()
+            pred_dict = self.forward(x_tensors, y_tensors, keys=('diri', 'nuem', 'f'))
+            loss = loss_func(pred_dict, true_dict) #.requires_grad_()
             
             self.callback(loss)
             if np.remainder(len(self.loss_list),100) == 0:
@@ -126,17 +170,18 @@ class PhysicsInformedNN(nn.Module):
             return loss
 
         optimizer.step(closure)
-        self.u_pred, self.f_pred = self.forward(x_u_tensor, y_u_tensor, x_f_tensor, y_f_tensor)
 
-        self.loss = loss_func((self.u_pred, self.f_pred), (u_tensor, f_tensor))
+        self.pred_dict = self.forward(x_tensors, y_tensors, keys=('diri', 'nuem', 'f'))
+        self.loss = loss_func(self.pred_dict, true_dict) #.requires_grad_()
 
-    def train(self, epoch, u_data, f_data, loss_func, optimizer):
-        x_u_tensor, y_u_tensor, u_tensor = u_data
-        x_f_tensor, y_f_tensor, f_tensor = f_data
+    def train(self, epoch, u_data, f_data, bc_data, loss_func, optimizer):
+        (x_tensors, y_tensors, true_dict) = self.unzip_train_dict(train_dict)
+
+
         for i in range(epoch):
             optimizer.zero_grad()
-            u_pred, f_pred = self.forward(x_u_tensor, y_u_tensor, x_f_tensor, y_f_tensor)
-            loss = loss_func((u_pred, f_pred), (u_tensor, f_tensor)) #.requires_grad_()
+            pred_dict = self.forward(x_tensors, y_tensors, keys=('diri', 'nuem', 'f'))
+            loss = loss_func(pred_dict, true_dict) #.requires_grad_()
             
             self.callback(loss)
             if np.remainder(len(self.loss_list),100) == 0:
@@ -148,9 +193,11 @@ class PhysicsInformedNN(nn.Module):
   
             optimizer.step()
 
-        self.u_pred, self.f_pred = self.forward(x_u_tensor, y_u_tensor, x_f_tensor, y_f_tensor)
+        self.pred_dict = self.forward(x_tensors, y_tensors, keys=('diri', 'nuem', 'f'))
+        self.loss = loss_func(self.pred_dict, true_dict) #.requires_grad_()
 
-        self.loss = loss_func((self.u_pred, self.f_pred), (u_tensor, f_tensor))
+    def callback(self, loss):
+        self.loss_list.append(loss)
 
     def coor_shift(self, X, lbs, ubs):
 
@@ -167,15 +214,16 @@ class PhysicsInformedNN(nn.Module):
 
         return (x_tensor, y_tensor, u_tensor)
 
+    def predict(self, X_input):
+        x_tensor = torch.tensor(X_input[:,0:1], dtype=torch.float32)
+        y_tensor = torch.tensor(X_input[:,1:2], dtype=torch.float32)
+        return self.neural_net(x_tensor, y_tensor, self.weights, self.biases).detach().numpy().squeeze()
+
 if __name__ == "__main__": 
        
-
-    N_u = 100
-    N_f = 20*20
-    N_uc = 30
-
-    nx = 61
-    ny = 61
+    # Exact solution, used as true value
+    nx = 64
+    ny = 64
 
     x = np.linspace(0,1,nx)
     y = np.linspace(0,1,ny)
@@ -192,55 +240,69 @@ if __name__ == "__main__":
     ub = X_star.max(0)    
     lbs = np.array([0,0])
     ubs = np.array([1,1])
+    
+    # Dirichlet BCs (top, left, bottom bounds)
+    N_diri = 100 # No. of point for Dirichlet BCs
+
     # top
     xx1 = np.hstack((X[0:1,:].T, Y[0:1,:].T))
     uu1 = Exact[0:1,:].T
-
     # left
     xx2 = np.hstack((X[:,0:1], Y[:,0:1]))
     uu2 = Exact[:,0:1]
-
     # bottom
     xx3 = np.hstack((X[-1:,:].T, Y[-1:,:].T))
     uu3 = Exact[-1:,:].T
 
-    # right
+    X_diri_train = np.vstack([xx1, xx2, xx3])
+    diri_train = np.vstack([uu1, uu2, uu3])
+    X_diri_train, diri_train = random_choice_sample([X_diri_train, diri_train], N_diri)
+
+    # Neumann BCs (right bound)
+    N_nuem = 30  # No. of points for Neumann BCs
+
     xx4 = np.hstack((X[:,-1:], Y[:,-1:]))
-    uu4 = np.zeros((xx4.shape[0],1))
+    dudx4 = np.zeros((xx4.shape[0],1))
+    X_nuem_train, nuem_train = random_choice_sample([xx4, dudx4], N_nuem)
 
-    X_u_train = np.vstack([xx1, xx2, xx3])
-    u_train = np.vstack([uu1, uu2, uu3])
+    # direct measurement data, besides known BCs
+    N_u = 100     # data match (direct measurement)
+    xx_u = np.hstack((X[1:-1,1:-1].flatten()[:,None], Y[1:-1,1:-1].flatten()[:,None]))
+    X_u_train, u_train = random_choice_sample([xx_u, np.expand_dims(Exact[1:-1,1:-1].flatten(), axis=1)], N_u)
 
+    # formulated PDE data collocation
+    N_f = 200
     X_f_train = lb + (ub-lb)*lhs(2, N_f)
-    X_f_train = np.vstack((X_f_train, X_u_train))
+    # X_f_train = np.vstack((X_f_train, X_u_train))
     f_train = np.zeros((X_f_train.shape[0],1))
-    
-    idx = np.random.choice(X_u_train.shape[0], N_u, replace=False)
-    X_u_train = X_u_train[idx, :]
-    u_train = u_train[idx, :]
-
-    # idx2 = np.random.choice(xx4.shape[0], N_uc, replace=False)
-    # X_bc_train = xx4[idx2,:]
-    # ux_bc_train = uu4[idx2,:]
-
-    BCs = [1]
 
     layers = [2, 20, 20, 20, 20, 20, 20, 1]
 
     model = PhysicsInformedNN(layers)
     u_data = model.data_loader(X_u_train, u_train, lbs, ubs)
     f_data = model.data_loader(X_f_train, f_train, lbs, ubs)
+    nuem_data = model.data_loader(X_nuem_train, nuem_train, lbs, ubs)
+    diri_data = model.data_loader(X_diri_train, diri_train, lbs, ubs)
+
+    # key:(data, loss_eval_weight) -> data: (x,y,val)
+    train_dict = {
+        'u': u_data,
+        'f': f_data,
+        'nuem': nuem_data,
+        'diri': diri_data
+    }
 
     start_time = time.time() 
+
     optimizer = torch.optim.LBFGS(params=model.weights+model.biases,
-                                    lr=0.001, max_iter=3000, #max_eval=4000,
+                                    lr=0.001, max_iter=300, #max_eval=4000,
                                     tolerance_grad=1e-05, tolerance_change=1e-07,
                                     history_size=10, line_search_fn=None)
 
-    model.train_LBFGS(u_data, f_data, model.loss_func, optimizer)
-
+    model.train_LBFGS(train_dict, model.loss_func, optimizer)
+    print(model.pred_dict['f'])
     # optimizer = torch.optim.Adam(model.weights+model.biases, lr=1e-5)
-    # model.train(1000, u_data, f_data, model.loss_func, optimizer)
+    # model.train(1000, u_data, f_data, bc_data, model.loss_func, optimizer)
 
     elapsed = time.time() - start_time                
     print('Training time: %.4f' % (elapsed))

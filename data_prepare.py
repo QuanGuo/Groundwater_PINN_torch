@@ -20,8 +20,8 @@ from matplotlib import rcParams
 # rcParams['font.family'] = 'serif'
 # rcParams['font.size'] = 16
 
-nx = 61
-ny = 61
+nx = 64
+ny = 64
 
 x = np.linspace(0,1,nx)
 y = np.linspace(0,1,ny)
