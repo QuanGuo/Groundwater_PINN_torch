@@ -31,9 +31,10 @@ Exact = p_analytical(x,y)
 u_pred = np.loadtxt('u_pred_torch.txt').reshape((nx,ny))
 plot_3D(x,y,u_pred, 'Prediction')
 plot_3D(x,y,Exact, 'True')
-# plot_map_2d(x, y, Exact-u_pred, (nx,ny))
+plot_map_2d(x, y, Exact-u_pred, 'abs_err')
 # compare_true_pred(Exact, u_pred, x, y)
 plt.show()
+
 
 # sigma2 = 1
 # lx = 20

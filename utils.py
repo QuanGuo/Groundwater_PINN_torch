@@ -154,14 +154,16 @@ def plot_3D(x, y, p, figname):
     ax.view_init(30,45)
     ax.set_title(figname)
 
-def plot_map_2d(x, y, z, shp=None):
-    fig = plt.figure(figsize=(5.5,3.5), dpi=100)
-    nx, ny = shp
+def plot_map_2d(x, y, z, figname):
+    fig = plt.figure(figsize=(5,3), dpi=100)
+
+    nx = len(x)
+    ny = len(y)
+
     X,Y = np.meshgrid(x,y)
     z = recover_mat(z, (nx,ny))
     plt.pcolormesh(X,Y,z)
     plt.colorbar()
-    return None
 
 def recover_mat(mat_flat=None, shp=None):
     mat = mat_flat.reshape(shp)
