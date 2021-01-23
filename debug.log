@@ -1,1 +1,13 @@
 [0117/175310.859:ERROR:directory_reader_win.cc(43)] FindFirstFile: The system cannot find the path specified. (0x3)
+[0118/075311.459:ERROR:directory_reader_win.cc(43)] FindFirstFile: The system cannot find the path specified. (0x3)
+[0121/211519.337:ERROR:directory_reader_win.cc(43)] FindFirstFile: The system cannot find the path specified. (0x3)
+[0121/212155.177:ERROR:process_info.cc(359)] UncheckedAllocate
+[0121/212338.932:ERROR:process_info.cc(359)] UncheckedAllocate
+[0121/212511.337:ERROR:process_info.cc(359)] UncheckedAllocate
+[0121/212515.129:ERROR:process_info.cc(359)] UncheckedAllocate
+[0121/212910.743:ERROR:process_info.cc(359)] UncheckedAllocate
+[0121/212926.820:ERROR:process_info.cc(359)] UncheckedAllocate
+[0121/212942.823:ERROR:process_info.cc(359)] UncheckedAllocate
+[0121/212955.197:ERROR:process_info.cc(359)] UncheckedAllocate
+[0121/214121.237:ERROR:directory_reader_win.cc(43)] FindFirstFile: The system cannot find the path specified. (0x3)
+[0122/173434.394:ERROR:directory_reader_win.cc(43)] FindFirstFile: The system cannot find the path specified. (0x3)
